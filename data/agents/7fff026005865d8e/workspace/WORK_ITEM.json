@@ -1,0 +1,15 @@
+{
+  "id": "edc04f1db3dce61e",
+  "title": "Test task",
+  "description": "",
+  "acceptanceCriteria": [],
+  "status": "ready",
+  "priority": "medium",
+  "complexity": "m",
+  "createdAt": "2026-02-13T05:26:45.609Z",
+  "updatedAt": "2026-02-13T05:26:45.609Z",
+  "createdBy": "unknown",
+  "artifacts": [],
+  "blockedBy": [],
+  "blocks": []
+}
