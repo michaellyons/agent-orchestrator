@@ -1,0 +1,15 @@
+{
+  "id": "881c2bd3070e871b",
+  "title": "Test agent execution",
+  "description": "",
+  "acceptanceCriteria": [],
+  "status": "ready",
+  "priority": true,
+  "complexity": "m",
+  "createdAt": "2026-02-16T00:13:01.281Z",
+  "updatedAt": "2026-02-16T00:13:05.170Z",
+  "createdBy": "cli",
+  "artifacts": [],
+  "blockedBy": [],
+  "blocks": []
+}
