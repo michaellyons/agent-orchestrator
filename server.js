@@ -8,6 +8,8 @@
  */
 
 const http = require('http');
+const fs = require('fs').promises;
+const path = require('path');
 const { getAdapter } = require('./src/queue/redis-adapter');
 const fileQueue = require('./src/queue');
 const { getExecutor } = require('./src/executor');
@@ -24,7 +26,7 @@ let executor = null;
  */
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
-  const path = url.pathname;
+  const reqPath = url.pathname;
   const method = req.method;
 
   // CORS
@@ -58,44 +60,52 @@ async function handleRequest(req, res) {
   });
 
   try {
+    // ========== STATIC GUI ==========
+    if (reqPath === '/' || reqPath === '/index.html') {
+      const html = await fs.readFile(path.join(__dirname, 'public/index.html'), 'utf8');
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(html);
+      return;
+    }
+
     // ========== HEALTH ==========
-    if (path === '/health') {
+    if (reqPath === '/health') {
       return json({ status: 'ok', timestamp: new Date().toISOString() });
     }
 
     // ========== QUEUE ENDPOINTS ==========
     
     // List items
-    if (path === '/api/queue' && method === 'GET') {
+    if (reqPath === '/api/queue' && method === 'GET') {
       const status = url.searchParams.get('status');
       const items = await queue.list(status);
       return json({ items, count: items.length });
     }
 
     // Add item
-    if (path === '/api/queue' && method === 'POST') {
+    if (reqPath === '/api/queue' && method === 'POST') {
       const body = await getBody();
       const item = await queue.enqueue(body);
       return json({ item }, 201);
     }
 
     // Get single item
-    if (path.match(/^\/api\/queue\/[\w-]+$/) && method === 'GET') {
-      const id = path.split('/').pop();
+    if (reqPath.match(/^\/api\/queue\/[\w-]+$/) && method === 'GET') {
+      const id = reqPath.split('/').pop();
       const item = await queue.get(id);
       if (!item) return json({ error: 'Not found' }, 404);
       return json({ item });
     }
 
     // Ready an item
-    if (path.match(/^\/api\/queue\/[\w-]+\/ready$/) && method === 'POST') {
-      const id = path.split('/')[3];
+    if (reqPath.match(/^\/api\/queue\/[\w-]+\/ready$/) && method === 'POST') {
+      const id = reqPath.split('/')[3];
       const item = await queue.ready(id);
       return json({ item });
     }
 
     // Claim next work
-    if (path === '/api/queue/claim' && method === 'POST') {
+    if (reqPath === '/api/queue/claim' && method === 'POST') {
       const body = await getBody();
       const agentId = body.agentId;
       if (!agentId) return json({ error: 'agentId required' }, 400);
