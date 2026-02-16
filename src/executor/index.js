@@ -17,6 +17,7 @@ const queue = require('../queue');
 const agentManager = require('../agents');
 const projects = require('../projects');
 const { eventStream } = require('../events');
+const repos = require('../repos');
 
 class Executor extends EventEmitter {
   constructor(options = {}) {
@@ -338,6 +339,17 @@ After completion, run:
     
     if (result.status === 'completed') {
       const artifacts = await agentManager.collectArtifacts(agentId);
+      const workItem = await queue.get(session.workItemId);
+      
+      // Handle repo output if configured
+      let repoOutput = null;
+      if (workItem.output?.type === 'repo') {
+        try {
+          repoOutput = await this._createRepoOutput(workItem, artifacts, agentContext);
+        } catch (err) {
+          console.error('Repo creation failed:', err.message);
+        }
+      }
       
       await queue.update(session.workItemId, {
         status: 'review',
@@ -347,6 +359,7 @@ After completion, run:
           path: a.path,
           description: a.name,
         })),
+        repoOutput,
       });
       
       this.running.delete(agentId);
@@ -355,6 +368,7 @@ After completion, run:
         agentId,
         workItemId: session.workItemId,
         artifacts: artifacts.length,
+        repoOutput,
       });
       
       // Check for pending spawns
@@ -364,6 +378,7 @@ After completion, run:
         status: 'completed',
         workItemId: session.workItemId,
         artifacts,
+        repoOutput,
         completionReport: result.completionReport,
       };
     }
@@ -385,6 +400,38 @@ After completion, run:
     }
     
     return { status: 'running', workItemId: session.workItemId };
+  }
+
+  /**
+   * Create repository output from artifacts
+   */
+  async _createRepoOutput(workItem, artifacts, agentContext) {
+    const repoConfig = workItem.output;
+    const repoName = repoConfig.name || `project-${workItem.id.slice(0, 8)}`;
+    
+    console.log(`📦 Creating repository: ${repoName}`);
+    
+    // Create repo via provider
+    const repo = await repos.createRepo(repoName, {
+      description: repoConfig.description || `Artifacts from: ${workItem.title}`,
+      private: repoConfig.private !== false,
+      template: repoConfig.template,
+    });
+    
+    // Push artifacts
+    if (artifacts.length > 0) {
+      await repos.pushArtifacts(repo.cloneUrl, agentContext.artifactsDir, 
+        `feat: deliverables from ${workItem.title}`);
+    }
+    
+    console.log(`✅ Repository created: ${repo.url}`);
+    
+    return {
+      provider: repo.provider,
+      name: repo.name,
+      url: repo.url,
+      cloneUrl: repo.cloneUrl,
+    };
   }
 
   /**
