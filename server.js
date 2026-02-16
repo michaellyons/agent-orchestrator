@@ -9,10 +9,12 @@
 
 const http = require('http');
 const { getAdapter } = require('./src/queue/redis-adapter');
+const fileQueue = require('./src/queue');
 const { getExecutor } = require('./src/executor');
 const users = require('./src/users');
 
 const PORT = process.env.PORT || 3000;
+const USE_FILE_QUEUE = process.env.USE_FILE_QUEUE === '1' || process.env.NO_REDIS === '1';
 
 let queue = null;
 let executor = null;
@@ -234,7 +236,12 @@ async function start() {
   console.log('🚀 Starting Orchestrator Server...\n');
 
   // Initialize queue adapter
-  queue = await getAdapter();
+  if (USE_FILE_QUEUE) {
+    console.log('📁 Using file-based queue (NO_REDIS/USE_FILE_QUEUE mode)');
+    queue = fileQueue;
+  } else {
+    queue = await getAdapter();
+  }
   console.log('✅ Queue adapter ready');
 
   // Initialize executor
