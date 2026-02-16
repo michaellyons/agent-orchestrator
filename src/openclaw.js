@@ -11,8 +11,8 @@
  * })
  */
 
-const queue = require('./src/queue');
-const { getExecutor } = require('./src/executor');
+const queue = require('./queue');
+const { getExecutor } = require('./executor');
 
 /**
  * Get spawn-ready task config for a work item
