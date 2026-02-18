@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Agent World - Isometric Scene</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; background: #1a1a2e; }
+    #canvas-container { width: 100vw; height: 100vh; }
+    .agent-label {
+      position: absolute;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      pointer-events: none;
+      transform: translate(-50%, -100%);
+      margin-top: -10px;
+      white-space: nowrap;
+    }
+    .controls {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      background: rgba(0,0,0,0.8);
+      padding: 16px;
+      border-radius: 8px;
+      color: white;
+      max-width: 300px;
+    }
+    .project-legend {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(0,0,0,0.8);
+      padding: 16px;
+      border-radius: 8px;
+      color: white;
+    }
+    .stats {
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      background: rgba(0,0,0,0.8);
+      padding: 16px;
+      border-radius: 8px;
+      color: white;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+  
+  <!-- Controls Panel -->
+  <div class="controls">
+    <h1 class="text-xl font-bold mb-2">🎮 3D Agent World</h1>
+    <p class="text-sm text-gray-400 mb-4">Isometric Multi-Agent Scene</p>
+    
+    <div class="space-y-2">
+      <button onclick="connectAgent()" class="w-full px-3 py-2 bg-green-600 hover:bg-green-500 rounded text-sm">
+        ➕ Connect Test Agent
+      </button>
+      <button onclick="disconnectAll()" class="w-full px-3 py-2 bg-red-600 hover:bg-red-500 rounded text-sm">
+        ⏏️ Disconnect All
+      </button>
+      <button onclick="randomWalk()" class="w-full px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm">
+        🎲 Random Walk
+      </button>
+      <button onclick="resetCamera()" class="w-full px-3 py-2 bg-gray-600 hover:bg-gray-500 rounded text-sm">
+        📷 Reset Camera
+      </button>
+    </div>
+    
+    <div class="mt-4 text-xs text-gray-500">
+      <p>Drag to rotate • Scroll to zoom</p>
+      <p>Agents stay within project boundaries</p>
+    </div>
+  </div>
+
+  <!-- Project Legend -->
+  <div class="project-legend">
+    <h3 class="font-bold mb-2">📁 Projects</h3>
+    <div id="project-list" class="space-y-2 text-sm">
+      <p class="text-gray-400">Loading...</p>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats">
+    <p class="text-sm">🟢 Connected Agents: <span id="agent-count" class="font-bold">0</span></p>
+    <p class="text-xs text-gray-400 mt-1">WebSocket: <span id="ws-status">Connecting...</span></p>
+  </div>
+
+  <!-- Agent Labels Container -->
+  <div id="labels-container"></div>
+
+  <script>
+    // ============================================
+    // 3D ISOMETRIC SCENE SETUP
+    // ============================================
+    
+    const container = document.getElementById('canvas-container');
+    const labelsContainer = document.getElementById('labels-container');
+    
+    // Scene setup
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1a2e);
+    scene.fog = new THREE.Fog(0x1a1a2e, 50, 200);
+    
+    // Isometric camera
+    const aspect = window.innerWidth / window.innerHeight;
+    const d = 60;
+    const camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 1, 1000);
+    camera.position.set(100, 100, 100);
+    camera.lookAt(0, 0, 0);
+    
+    // Renderer
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+    
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(50, 100, 50);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 2048;
+    dirLight.shadow.mapSize.height = 2048;
+    scene.add(dirLight);
+    
+    // Ground plane with grid
+    const groundGeometry = new THREE.PlaneGeometry(200, 200);
+    const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x16213e });
+    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+    
+    // Grid helper
+    const gridHelper = new THREE.GridHelper(200, 40, 0x3a3a5c, 0x2a2a4c);
+    scene.add(gridHelper);
+    
+    // ============================================
+    // PROJECT BOUNDARIES
+    // ============================================
+    
+    const projects = new Map();
+    const projectColors = [
+      0xe74c3c, // Red
+      0x3498db, // Blue
+      0x2ecc71, // Green
+      0xf39c12, // Orange
+      0x9b59b6, // Purple
+      0x1abc9c, // Teal
+      0xe91e63, // Pink
+      0x00bcd4, // Cyan
+    ];
+    
+    function createProjectBoundary(projectId, bounds, colorIndex = 0) {
+      const color = projectColors[colorIndex % projectColors.length];
+      const { minX, maxX, minZ, maxZ } = bounds;
+      
+      // Create boundary walls
+      const wallHeight = 4;
+      const wallThickness = 0.5;
+      const wallMaterial = new THREE.MeshLambertMaterial({ 
+        color: color,
+        transparent: true,
+        opacity: 0.3
+      });
+      const wallEdgeMaterial = new THREE.MeshLambertMaterial({ color: color });
+      
+      const group = new THREE.Group();
+      
+      // Floor highlight
+      const floorGeo = new THREE.PlaneGeometry(maxX - minX, maxZ - minZ);
+      const floorMat = new THREE.MeshLambertMaterial({ 
+        color: color,
+        transparent: true,
+        opacity: 0.1
+      });
+      const floor = new THREE.Mesh(floorGeo, floorMat);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.set((minX + maxX) / 2, 0.01, (minZ + maxZ) / 2);
+      floor.receiveShadow = true;
+      group.add(floor);
+      
+      // Corner posts
+      const postGeo = new THREE.BoxGeometry(1, wallHeight + 1, 1);
+      const corners = [
+        [minX, minZ],
+        [maxX, minZ],
+        [maxX, maxZ],
+        [minX, maxZ]
+      ];
+      
+      corners.forEach(([x, z]) => {
+        const post = new THREE.Mesh(postGeo, wallEdgeMaterial);
+        post.position.set(x, wallHeight / 2, z);
+        post.castShadow = true;
+        group.add(post);
+      });
+      
+      // Walls
+      const width = maxX - minX;
+      const depth = maxZ - minZ;
+      
+      // Front and back walls
+      const wallGeoH = new THREE.BoxGeometry(width, wallHeight, wallThickness);
+      const frontWall = new THREE.Mesh(wallGeoH, wallMaterial);
+      frontWall.position.set((minX + maxX) / 2, wallHeight / 2, minZ);
+      group.add(frontWall);
+      
+      const backWall = new THREE.Mesh(wallGeoH, wallMaterial);
+      backWall.position.set((minX + maxX) / 2, wallHeight / 2, maxZ);
+      group.add(backWall);
+      
+      // Left and right walls
+      const wallGeoV = new THREE.BoxGeometry(wallThickness, wallHeight, depth);
+      const leftWall = new THREE.Mesh(wallGeoV, wallMaterial);
+      leftWall.position.set(minX, wallHeight / 2, (minZ + maxZ) / 2);
+      group.add(leftWall);
+      
+      const rightWall = new THREE.Mesh(wallGeoV, wallMaterial);
+      rightWall.position.set(maxX, wallHeight / 2, (minZ + maxZ) / 2);
+      group.add(rightWall);
+      
+      // Project label
+      const label = document.createElement('div');
+      label.className = 'agent-label';
+      label.textContent = projectId.slice(0, 8);
+      label.style.color = '#' + color.toString(16).padStart(6, '0');
+      labelsContainer.appendChild(label);
+      
+      scene.add(group);
+      
+      const project = {
+        id: projectId,
+        bounds,
+        color,
+        colorIndex,
+        group,
+        label,
+        labelElement: label
+      };
+      
+      projects.set(projectId, project);
+      updateProjectLegend();
+      
+      return project;
+    }
+    
+    function updateProjectLegend() {
+      const list = document.getElementById('project-list');
+      if (projects.size === 0) {
+        list.innerHTML = '<p class="text-gray-400">No active projects</p>';
+        return;
+      }
+      
+      list.innerHTML = Array.from(projects.values()).map(p => `
+        <div class="flex items-center gap-2">
+          <div class="w-3 h-3 rounded" style="background: #${p.color.toString(16).padStart(6, '0')}"></div>
+          <span>${p.id.slice(0, 12)}...</span>
+        </div>
+      `).join('');
+    }
+    
+    // ============================================
+    // AGENT CHARACTERS
+    // ============================================
+    
+    const agents = new Map();
+    let agentCounter = 0;
+    
+    function createAgent(projectId, agentName, x = 0, z = 0) {
+      agentCounter++;
+      const id = `agent-${agentCounter}`;
+      
+      const project = projects.get(projectId);
+      if (!project) {
+        console.error(`Project ${projectId} not found`);
+        return null;
+      }
+      
+      // Agent body (capsule-like shape using cylinder + spheres)
+      const color = project.color;
+      const group = new THREE.Group();
+      
+      // Body
+      const bodyGeo = new THREE.CylinderGeometry(1, 1, 2.5, 16);
+      const bodyMat = new THREE.MeshLambertMaterial({ color: color });
+      const body = new THREE.Mesh(bodyGeo, bodyMat);
+      body.position.y = 1.25;
+      body.castShadow = true;
+      group.add(body);
+      
+      // Head
+      const headGeo = new THREE.SphereGeometry(0.7, 16, 16);
+      const headMat = new THREE.MeshLambertMaterial({ color: 0xffdbac });
+      const head = new THREE.Mesh(headGeo, headMat);
+      head.position.y = 2.8;
+      head.castShadow = true;
+      group.add(head);
+      
+      // Eyes (to show direction)
+      const eyeGeo = new THREE.SphereGeometry(0.15, 8, 8);
+      const eyeMat = new THREE.MeshLambertMaterial({ color: 0x000000 });
+      const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+      leftEye.position.set(-0.25, 2.9, 0.5);
+      group.add(leftEye);
+      
+      const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+      rightEye.position.set(0.25, 2.9, 0.5);
+      group.add(rightEye);
+      
+      // Selection ring
+      const ringGeo = new THREE.RingGeometry(1.5, 1.8, 32);
+      const ringMat = new THREE.MeshBasicMaterial({ 
+        color: color,
+        transparent: true,
+        opacity: 0.5,
+        side: THREE.DoubleSide
+      });
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.1;
+      ring.visible = false;
+      group.add(ring);
+      
+      // Set initial position
+      group.position.set(x, 0, z);
+      scene.add(group);
+      
+      // Label
+      const label = document.createElement('div');
+      label.className = 'agent-label';
+      label.textContent = agentName || id;
+      label.style.borderLeft = `3px solid #${color.toString(16).padStart(6, '0')}`;
+      labelsContainer.appendChild(label);
+      
+      const agent = {
+        id,
+        projectId,
+        name: agentName || id,
+        group,
+        label,
+        color,
+        ring,
+        targetX: x,
+        targetZ: z,
+        moving: false,
+        walkSpeed: 0.1 + Math.random() * 0.05
+      };
+      
+      agents.set(id, agent);
+      updateAgentCount();
+      
+      return agent;
+    }
+    
+    function removeAgent(id) {
+      const agent = agents.get(id);
+      if (!agent) return;
+      
+      scene.remove(agent.group);
+      agent.label.remove();
+      agents.delete(id);
+      updateAgentCount();
+    }
+    
+    function updateAgentCount() {
+      document.getElementById('agent-count').textContent = agents.size;
+    }
+    
+    function moveAgent(id, x, z) {
+      const agent = agents.get(id);
+      if (!agent) return;
+      
+      const project = projects.get(agent.projectId);
+      if (!project) return;
+      
+      // Clamp to boundaries
+      const { minX, maxX, minZ, maxZ } = project.bounds;
+      agent.targetX = Math.max(minX + 2, Math.min(maxX - 2, x));
+      agent.targetZ = Math.max(minZ + 2, Math.min(maxZ - 2, z));
+      agent.moving = true;
+      
+      // Calculate direction for rotation
+      const dx = agent.targetX - agent.group.position.x;
+      const dz = agent.targetZ - agent.group.position.z;
+      const angle = Math.atan2(dx, dz);
+      agent.group.rotation.y = angle;
+    }
+    
+    function animateAgents() {
+      agents.forEach(agent => {
+        if (agent.moving) {
+          const dx = agent.targetX - agent.group.position.x;
+          const dz = agent.targetZ - agent.group.position.z;
+          const dist = Math.sqrt(dx * dx + dz * dz);
+          
+          if (dist < 0.1) {
+            agent.moving = false;
+            agent.group.position.x = agent.targetX;
+            agent.group.position.z = agent.targetZ;
+          } else {
+            const moveX = (dx / dist) * agent.walkSpeed;
+            const moveZ = (dz / dist) * agent.walkSpeed;
+            agent.group.position.x += moveX;
+            agent.group.position.z += moveZ;
+            
+            // Bobbing animation
+            agent.group.position.y = Math.sin(Date.now() * 0.01) * 0.1;
+          }
+        }
+        
+        // Update label position
+        const pos = agent.group.position.clone();
+        pos.y += 4;
+        pos.project(camera);
+        
+        const x = (pos.x * 0.5 + 0.5) * window.innerWidth;
+        const y = (-pos.y * 0.5 + 0.5) * window.innerHeight;
+        
+        agent.label.style.left = `${x}px`;
+        agent.label.style.top = `${y}px`;
+      });
+      
+      // Update project label positions
+      projects.forEach(project => {
+        const { minX, maxX, minZ, maxZ } = project.bounds;
+        const pos = new THREE.Vector3((minX + maxX) / 2, 6, (minZ + maxZ) / 2);
+        pos.project(camera);
+        
+        const x = (pos.x * 0.5 + 0.5) * window.innerWidth;
+        const y = (-pos.y * 0.5 + 0.5) * window.innerHeight;
+        
+        project.label.style.left = `${x}px`;
+        project.label.style.top = `${y}px`;
+      });
+    }
+    
+    // ============================================
+    // CAMERA CONTROLS
+    // ============================================
+    
+    let cameraAngle = Math.PI / 4;
+    let cameraZoom = 1;
+    let isDragging = false;
+    let lastMouseX = 0;
+    let lastMouseY = 0;
+    
+    function updateCamera() {
+      const dist = 100 * cameraZoom;
+      camera.position.x = Math.cos(cameraAngle) * dist;
+      camera.position.z = Math.sin(cameraAngle) * dist;
+      camera.lookAt(0, 0, 0);
+      camera.updateProjectionMatrix();
+    }
+    
+    function resetCamera() {
+      cameraAngle = Math.PI / 4;
+      cameraZoom = 1;
+      updateCamera();
+    }
+    
+    container.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      lastMouseX = e.clientX;
+      lastMouseY = e.clientY;
+    });
+    
+    window.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
+    
+    window.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        const deltaX = e.clientX - lastMouseX;
+        cameraAngle += deltaX * 0.01;
+        lastMouseX = e.clientX;
+        lastMouseY = e.clientY;
+        updateCamera();
+      }
+    });
+    
+    container.addEventListener('wheel', (e) => {
+      cameraZoom *= e.deltaY > 0 ? 1.1 : 0.9;
+      cameraZoom = Math.max(0.3, Math.min(3, cameraZoom));
+      updateCamera();
+    });
+    
+    // ============================================
+    // WEBSOCKET CONNECTION
+    // ============================================
+    
+    let ws = null;
+    const wsStatus = document.getElementById('ws-status');
+    
+    function connectWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws/agents`;
+      
+      ws = new WebSocket(wsUrl);
+      
+      ws.onopen = () => {
+        wsStatus.textContent = 'Connected';
+        wsStatus.style.color = '#2ecc71';
+        console.log('WebSocket connected');
+      };
+      
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        handleWebSocketMessage(data);
+      };
+      
+      ws.onclose = () => {
+        wsStatus.textContent = 'Disconnected - Retrying...';
+        wsStatus.style.color = '#e74c3c';
+        setTimeout(connectWebSocket, 3000);
+      };
+      
+      ws.onerror = (err) => {
+        console.error('WebSocket error:', err);
+        wsStatus.textContent = 'Error';
+        wsStatus.style.color = '#e74c3c';
+      };
+    }
+    
+    function handleWebSocketMessage(data) {
+      switch (data.type) {
+        case 'agent:connect':
+          if (!projects.has(data.projectId)) {
+            createProjectBoundary(data.projectId, data.bounds, projects.size);
+          }
+          createAgent(data.projectId, data.agentName, data.x, data.z);
+          break;
+          
+        case 'agent:disconnect':
+          removeAgent(data.agentId);
+          break;
+          
+        case 'agent:move':
+          moveAgent(data.agentId, data.x, data.z);
+          break;
+          
+        case 'agent:position':
+          // Update position broadcast from other clients
+          const agent = agents.get(data.agentId);
+          if (agent) {
+            agent.group.position.x = data.x;
+            agent.group.position.z = data.z;
+          }
+          break;
+          
+        case 'project:boundary':
+          if (!projects.has(data.projectId)) {
+            createProjectBoundary(data.projectId, data.bounds, projects.size);
+          }
+          break;
+          
+        case 'init':
+          // Initial state from server
+          data.projects.forEach((p, i) => {
+            if (!projects.has(p.id)) {
+              createProjectBoundary(p.id, p.bounds, i);
+            }
+          });
+          data.agents.forEach(a => {
+            createAgent(a.projectId, a.name, a.x, a.z);
+          });
+          break;
+      }
+    }
+    
+    function sendMessage(type, data) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type, ...data }));
+      }
+    }
+    
+    // ============================================
+    // DEMO FUNCTIONS
+    // ============================================
+    
+    function connectAgent() {
+      // Create a demo project if none exists
+      if (projects.size === 0) {
+        createProjectBoundary('demo-project-1', {
+          minX: -40, maxX: -10,
+          minZ: -40, maxZ: -10
+        }, 0);
+      }
+      
+      const project = Array.from(projects.values())[0];
+      const { minX, maxX, minZ, maxZ } = project.bounds;
+      const x = minX + Math.random() * (maxX - minX);
+      const z = minZ + Math.random() * (maxZ - minZ);
+      
+      const agentName = `Agent-${Math.floor(Math.random() * 1000)}`;
+      createAgent(project.id, agentName, x, z);
+      
+      sendMessage('agent:connect', {
+        projectId: project.id,
+        agentName,
+        x, z
+      });
+    }
+    
+    function disconnectAll() {
+      agents.forEach((agent, id) => {
+        sendMessage('agent:disconnect', { agentId: id });
+        removeAgent(id);
+      });
+    }
+    
+    function randomWalk() {
+      agents.forEach((agent, id) => {
+        const project = projects.get(agent.projectId);
+        if (!project) return;
+        
+        const { minX, maxX, minZ, maxZ } = project.bounds;
+        const x = minX + 2 + Math.random() * (maxX - minX - 4);
+        const z = minZ + 2 + Math.random() * (maxZ - minZ - 4);
+        
+        moveAgent(id, x, z);
+        sendMessage('agent:move', { agentId: id, x, z });
+      });
+    }
+    
+    // ============================================
+    // INITIALIZATION
+    // ============================================
+    
+    // Create some demo projects
+    function initDemo() {
+      createProjectBoundary('project-alpha', {
+        minX: -50, maxX: -15,
+        minZ: -50, maxZ: -15
+      }, 0);
+      
+      createProjectBoundary('project-beta', {
+        minX: 15, maxX: 50,
+        minZ: -50, maxZ: -15
+      }, 1);
+      
+      createProjectBoundary('project-gamma', {
+        minX: -20, maxX: 20,
+        minZ: 10, maxZ: 45
+      }, 2);
+      
+      // Add demo agents
+      setTimeout(() => {
+        createAgent('project-alpha', 'Alice', -35, -35);
+        createAgent('project-beta', 'Bob', 30, -30);
+        createAgent('project-gamma', 'Charlie', 0, 25);
+      }, 500);
+    }
+    
+    // Animation loop
+    function animate() {
+      requestAnimationFrame(animate);
+      animateAgents();
+      renderer.render(scene, camera);
+    }
+    
+    // Handle resize
+    window.addEventListener('resize', () => {
+      const aspect = window.innerWidth / window.innerHeight;
+      camera.left = -d * aspect;
+      camera.right = d * aspect;
+      camera.top = d;
+      camera.bottom = -d;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+    
+    // Start
+    initDemo();
+    connectWebSocket();
+    animate();
+    
+    // Random walk demo every 5 seconds
+    setInterval(() => {
+      if (agents.size > 0 && Math.random() > 0.5) {
+        randomWalk();
+      }
+    }, 5000);
+  </script>
+</body>
+</html>
